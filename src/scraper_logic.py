@@ -1,47 +1,46 @@
+from urllib.parse import urljoin
 import requests
-from bs4 import BeautifulSoup
+from class_selectors import *
 
-# Class to wrap CSS selectors
-class Selector:
-    def __init__(self, *args):
-        self.selectors = args
-        self.count = len(args)
-
-    def get_selectors(self):
-        return self.selectors
-    
-    def get_item(self, index):
-        return self.selectors[index]
-    
-    def get_count(self):
-        return self.count
-    
+# Interface: AbstractSelector
+# Implementations: TagSelector, AttributeSelector
 
 def fetch_page(url: str):
     response = requests.get(url)
     response.raise_for_status()
-    return response.content
+    return response
 
 def soupify(html_content):
     # html_content: response.content
     return BeautifulSoup(html_content, "html.parser")
 
-def select_elements(soup, selector_set: Selector):
-    elements = []
-    for i in range(selector_set.get_count()):
-        selected = soup.select(selector_set.get_item(i))
-        elements.append(selected)
-    return elements
+def select_elements(soup: BeautifulSoup, column_jobs: List[AbstractSelector]) -> List[List[Tag]]:
+    element_lists = []
+    for job in column_jobs:
+        # Every job knows how to find its elements
+        elements = job.find_elements(soup)
+        element_lists.append(elements)
+        
+    return element_lists
 
-def format_results(element_list):
+def format_results(element_lists: List[List[Tag]], column_jobs: List[AbstractSelector], base_url: str) -> List[List[Any]]:
     # zip(*element_lists) transforms [ [a,b], [c,d] ] in zip([a,b], [c,d])
-    # into (a, c), (b, d)
-    zipped_tags = zip(*element_list)
+    zipped_tags = zip(*element_lists)
     
     results = []
-    for group in zipped_tags:
-        # group is a Tag tuple, es: (<tag_name>, <tag_price>)
-        cleaned_group = [tag.text.strip() for tag in group]
+    for tag_group in zipped_tags:
+        cleaned_group = []
+        
+        for tag, job in zip(tag_group, column_jobs):
+            cleaned_data = job.extract(tag)
+
+            if isinstance(job, AttributeSelector) and \
+                job.attribute_name in ('href', 'src') and \
+                cleaned_data:
+                cleaned_data = urljoin(base_url, cleaned_data)
+
+            cleaned_group.append(cleaned_data)
+            
         results.append(cleaned_group)
     
     return results
