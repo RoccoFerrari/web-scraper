@@ -2,7 +2,7 @@
 from abc import ABC, abstractmethod
 from bs4.element import Tag
 from bs4 import BeautifulSoup
-from typing import List, Any, Optional
+from typing import List, Optional
 
 class AbstractSelector(ABC):
     """
@@ -71,3 +71,30 @@ class AttributeSelector(AbstractSelector):
         if element:
             return element.get(self.attribute_name)
         return None
+    
+
+
+class GUIRef():
+    """
+    Class that contains elements from GUI:
+        - url
+        - format (csv, json, ...)
+        - AbstractSelector (TagSelector, AttributeSelector)
+    """
+    def __init__(self, url: str, format: str, selectors: List[AbstractSelector]):
+        self._url = url
+        self._format = format
+        self._selectors = selectors
+
+    # Public properties to provide read-only access without exposing internals
+    @property
+    def url(self) -> str:
+        return self._url
+
+    @property
+    def format(self) -> str:
+        return self._format
+
+    @property
+    def selectors(self) -> List[AbstractSelector]:
+        return self._selectors

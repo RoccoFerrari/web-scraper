@@ -1,6 +1,8 @@
 from urllib.parse import urljoin
 import requests
 from class_selectors import *
+from queue import Queue
+from typing import Any
 
 # Interface: AbstractSelector
 # Implementations: TagSelector, AttributeSelector
@@ -44,3 +46,22 @@ def format_results(element_lists: List[List[Tag]], column_jobs: List[AbstractSel
         results.append(cleaned_group)
     
     return results
+
+def execute_scraping(gui_data: GUIRef, result_queue: Queue):
+    """
+    Executes the whole workflow in a separeted thread
+    It puts the results in the queue
+    """
+    try:
+        response = fetch_page(gui_data.url)
+
+        soup = soupify(response.content)
+
+        tag_lists = select_elements(soup, gui_data._selectors)
+
+        final_results = format_results(tag_lists, gui_data._selectors, response.url)
+
+        result_queue.put(final_results)
+
+    except Exception as e:
+        result_queue.put(e)
