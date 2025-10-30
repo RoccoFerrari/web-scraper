@@ -57,9 +57,8 @@ def execute_scraping(gui_data: GUIRef, result_queue: Queue):
 
         soup = soupify(response.content)
 
-        tag_lists = select_elements(soup, gui_data._selectors)
-
-        final_results = format_results(tag_lists, gui_data._selectors, response.url)
+        tag_lists = select_elements(soup, gui_data.selectors)
+        final_results = format_results(tag_lists, gui_data.selectors, response.url)
 
         result_queue.put(final_results)
 

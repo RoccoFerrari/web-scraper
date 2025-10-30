@@ -308,6 +308,8 @@ class WebScraperGUI:
             # Try to get an elem from queue without stop the process
             result = self.result_queue.get_nowait()
 
+            # Reset and prepare the results text area
+            self.results_text.config(state='normal')
             self.results_text.delete('1.0', tk.END)
 
             if isinstance(result, Exception):
@@ -322,6 +324,7 @@ class WebScraperGUI:
                     cleaned_row = [str(item) if item is not None else "N/A" for item in row]
                     self.results_text.insert(tk.END, " : ".join(cleaned_row) + "\n")
 
+            # Lock the text area again
             self.results_text.config(state='disabled')
 
         except Empty:
