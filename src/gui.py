@@ -1,6 +1,11 @@
 import tkinter as tk
+import threading
+import scraper_logic as sl
+from queue import Queue, Empty
 from tkinter import ttk
 from tkinter import scrolledtext
+from class_selectors import GUIRef, AbstractSelector, TagSelector, AttributeSelector
+from typing import List
 
 class WebScraperGUI:
     """
@@ -21,7 +26,11 @@ class WebScraperGUI:
         self.style = ttk.Style()
         self.style.theme_use('clam') 
 
-        # List to keep track of all dynamic selector row widgets
+        
+        # Queue used to receive results from the scraping thread
+        self.result_queue = Queue()
+
+        # Track dynamic selector rows (initialized before creating selector UI)
         self.selector_rows = []
 
         # --- Main Frame ---
@@ -203,73 +212,120 @@ class WebScraperGUI:
     def execute_connector(self):
         """
         This function is connected to the 'Run' button.
-        It collects all data from the GUI and prints it to the
-        output area to show what data *would* be passed to the backend.
+        It collects and validates all data from the GUI to build the GUIRef object.
+        
+        It writes to the output area ONLY if a validation error occurs.
+        The actual scraping logic should be called at the end of this function.
         """
-        # Enable the text area for writing
+        
+        # Prepare the text area (clear it, ready for results or errors)
         self.results_text.config(state='normal')
         self.results_text.delete('1.0', tk.END)
 
-        self.results_text.insert(tk.END, "--- Data Collected from GUI ---\n\n")
+        # Flag to track validation errors
+        has_errors = False
 
-        # 1. Get URL
+        # Collect URL and Format 
         url = self.url_entry.get()
-        self.results_text.insert(tk.END, f"URL: {url}\n")
-        self.results_text.insert(tk.END, "-"*30 + "\n")
-
-        # 2. Get Selectors
-        self.results_text.insert(tk.END, "Selectors Configured:\n")
+        save_format = self.save_format_var.get()
         
-        if not self.selector_rows:
-             self.results_text.insert(tk.END, "(No selectors added)\n")
+        # Validate URL
+        if not url:
+            self.results_text.insert(tk.END, "Error: The URL field is required.\n")
+            has_errors = True
         
-        collected_selectors = []
+        # Build Selector Objects 
+        cols_to_extract: List[AbstractSelector] = [] # Typo fixed (extratc -> extract)
 
         for i, row in enumerate(self.selector_rows):
             selector_str = row["selector"].get()
-            scrape_type = row["type_button"]["text"] # "Text" or "Attribute"
+            scrape_type = row["type_button"]["text"]
             
-            row_output = f"  Row {i+1}:\n"
-            row_output += f"    - Selector: {selector_str or 'Not specified'}\n"
-            row_output += f"    - Type: {scrape_type}\n"
+            if not selector_str:
+                continue
+
+            try:
+                if scrape_type == "Text":
+                    job = TagSelector(selector_str)
+                    cols_to_extract.append(job)
+                
+                elif scrape_type == "Attribute":
+                    attr_name = row["attribute"].get()
+                    if not attr_name:
+                        # Validation Error: Attribute name is missing
+                        self.results_text.insert(tk.END, f"Error Row {i+1}: 'Attribute' type selected, but attribute name is missing.\n")
+                        has_errors = True
+                        continue
+                    
+                    job = AttributeSelector(attr_name, selector_str)
+                    cols_to_extract.append(job)
             
-            selector_config = {
-                "selector": selector_str,
-                "type": scrape_type.lower()
-            }
-
-            if scrape_type == "Attribute":
-                attr_name = row["attribute"].get()
-                row_output += f"    - Attribute: {attr_name or 'Not specified'}\n"
-                selector_config["attribute_name"] = attr_name
-
-            collected_selectors.append(selector_config)
-            self.results_text.insert(tk.END, row_output)
-
-        # 3. Get Save Format
-        save_format = self.save_format_var.get()
-        self.results_text.insert(tk.END, "-"*30 + "\n")
-        self.results_text.insert(tk.END, f"Save Format: {save_format}\n")
+            except Exception as e:
+                 # This is likely a programming error, but we show it
+                 self.results_text.insert(tk.END, f"Error processing row {i+1}: {e}\n")
+                 has_errors = True
         
-        # 4. Show the data structure that would be passed to the backend
-        self.results_text.insert(tk.END, "\n--- Data Structure for Backend ---\n")
+        # Validate that at least one selector was added
+        if not cols_to_extract and not has_errors:
+            # Only show this if no other errors were found
+            self.results_text.insert(tk.END, "Error: No valid selectors were configured.\n")
+            has_errors = True
         
-        backend_data = {
-            "url": url,
-            "selectors": collected_selectors,
-            "save_format": save_format
-        }
-        
-        # Pretty-print the data (simulating JSON for clarity)
-        import json
-        self.results_text.insert(tk.END, json.dumps(backend_data, indent=2))
+        # Stop if any validation errors were found 
+        if has_errors:
+            self.results_text.insert(tk.END, "\nPlease fix the errors and try again.")
+            self.results_text.config(state='disabled') # Lock the text area
+            return # Stop the function
 
-        # Disable the text area to make it read-only again
+        # Create the GUIRef object 
+        # At this point, we know the input data is valid.
+        try:
+            gui_data_object = GUIRef(url=url, format=save_format, selectors=cols_to_extract)
+        except Exception as e:
+            self.results_text.insert(tk.END, f"\n--- Critical Error ---\nCould not create data object: {e}\n")
+            self.results_text.config(state='disabled')
+            return
+        
+        #### Scraping function logic
+        self.results_text.insert(tk.END, f"Scraping from {gui_data_object.url}...\n")
+
+        job_thread = threading.Thread(
+            target=sl.execute_scraping,
+            args=(gui_data_object, self.result_queue)
+        )
+        job_thread.daemon = True # Allow the app to close even if the thread is executing
+        job_thread.start()
+
+        self.root.after(100, self.process_queue)
+
         self.results_text.config(state='disabled')
 
+    def process_queue(self):
+        """
+        Controlls resulting_queue with no blocking GUI
+        """
+        try:
+            # Try to get an elem from queue without stop the process
+            result = self.result_queue.get_nowait()
 
-if __name__ == "__main__":
-    # Standard boilerplate to run the Tkinter application
-    root = tk.Tk()
-    app = WebScraperGUI(root)
-    root.mainloop()
+            # Reset and prepare the results text area
+            self.results_text.config(state='normal')
+            self.results_text.delete('1.0', tk.END)
+
+            if isinstance(result, Exception):
+                self.results_text.insert(tk.END, f"--- Scraping failed ---\n\n{result}")
+
+            else:
+                self.results_text.insert(tk.END, "--- Scraping results ---\n\n")
+                if not result:
+                    self.results_text.insert(tk.END, "No data found with those selectors")
+                
+                for row in result:
+                    cleaned_row = [str(item) if item is not None else "N/A" for item in row]
+                    self.results_text.insert(tk.END, " : ".join(cleaned_row) + "\n")
+
+            # Lock the text area again
+            self.results_text.config(state='disabled')
+
+        except Empty:
+            self.root.after(100, self.process_queue)
