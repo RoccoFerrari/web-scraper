@@ -6,6 +6,8 @@ from tkinter import ttk
 from tkinter import scrolledtext
 from class_selectors import GUIRef, AbstractSelector, TagSelector, AttributeSelector
 from typing import List
+from tkinter import scrolledtext, filedialog
+from data_handler import save_data
 
 class WebScraperGUI:
     """
@@ -29,6 +31,22 @@ class WebScraperGUI:
         
         # Queue used to receive results from the scraping thread
         self.result_queue = Queue()
+
+        self.last_results = None # Memory of last results
+        self.save_button = None # Reference to the Save button
+        self.run_button = None
+
+        self.save_dialog_configs = {
+            'csv': {
+                'filetypes': [('CSV files', '*.csv'), ('All files', '*.*')],
+                'defaultextension': '.csv'
+            },
+            'json': {
+                'filetypes': [('JSON files', '*.json'), ('All files', '*.*')],
+                'defaultextension': '.json'
+            }
+            # Future formats can be added here
+        }
 
         # Track dynamic selector rows (initialized before creating selector UI)
         self.selector_rows = []
@@ -158,12 +176,12 @@ class WebScraperGUI:
         run_frame = ttk.Frame(parent_frame, padding=(0, 10))
         run_frame.pack(fill='x')
 
-        run_button = ttk.Button(
+        self.run_button = ttk.Button(
             run_frame, 
             text="Run", 
             command=self.execute_connector # Connects to the data gathering function
         )
-        run_button.pack()
+        self.run_button.pack()
 
     def create_results_section(self, parent_frame):
         """Creates the text area for results, with a scrollbar."""
@@ -209,6 +227,14 @@ class WebScraperGUI:
         )
         json_radio.pack(side=tk.LEFT, padx=5)
 
+        self.save_button = ttk.Button(
+            save_frame,
+            text="Save Results",
+            command=self.save_results, 
+            state='disabled'          
+        ) 
+        self.save_button.pack(side=tk.RIGHT, padx=10)
+
     def execute_connector(self):
         """
         This function is connected to the 'Run' button.
@@ -221,6 +247,10 @@ class WebScraperGUI:
         # Prepare the text area (clear it, ready for results or errors)
         self.results_text.config(state='normal')
         self.results_text.delete('1.0', tk.END)
+
+        self.last_results = None # 
+        self.save_button.config(state='disabled')
+        self.run_button.config(state='disabled')
 
         # Flag to track validation errors
         has_errors = False
@@ -275,6 +305,7 @@ class WebScraperGUI:
         if has_errors:
             self.results_text.insert(tk.END, "\nPlease fix the errors and try again.")
             self.results_text.config(state='disabled') # Lock the text area
+            self.run_button.config(state='normal')
             return # Stop the function
 
         # Create the GUIRef object 
@@ -284,6 +315,7 @@ class WebScraperGUI:
         except Exception as e:
             self.results_text.insert(tk.END, f"\n--- Critical Error ---\nCould not create data object: {e}\n")
             self.results_text.config(state='disabled')
+            self.run_button.config(state='normal')
             return
         
         #### Scraping function logic
@@ -308,24 +340,83 @@ class WebScraperGUI:
             # Try to get an elem from queue without stop the process
             result = self.result_queue.get_nowait()
 
+            self.run_button.config(state='normal')
+
             # Reset and prepare the results text area
             self.results_text.config(state='normal')
             self.results_text.delete('1.0', tk.END)
 
             if isinstance(result, Exception):
                 self.results_text.insert(tk.END, f"--- Scraping failed ---\n\n{result}")
+                self.last_results = None
+                self.save_button.config(state='disabled')
 
             else:
                 self.results_text.insert(tk.END, "--- Scraping results ---\n\n")
                 if not result:
                     self.results_text.insert(tk.END, "No data found with those selectors")
+                    self.last_results = None
+                    self.save_button.config(state='disabled')
                 
-                for row in result:
-                    cleaned_row = [str(item) if item is not None else "N/A" for item in row]
-                    self.results_text.insert(tk.END, " : ".join(cleaned_row) + "\n")
+                else:
+                    self.last_results = result 
+                    self.save_button.config(state='normal') 
+                
+                    for row in result:
+                        cleaned_row = [str(item) if item is not None else "N/A" for item in row]
+                        self.results_text.insert(tk.END, " : ".join(cleaned_row) + "\n")
 
             # Lock the text area again
             self.results_text.config(state='disabled')
 
         except Empty:
             self.root.after(100, self.process_queue)
+
+    def save_results(self):
+        """
+        Called when the "Save Results" button is clicked.
+        This function handles saving the last scraped results
+        """
+        # Check if there are results to save
+        if not self.last_results:
+            self.results_text.config(state='normal')
+            self.results_text.insert(tk.END, "\n--- No data to save ---")
+            self.results_text.config(state='disabled')
+            return
+            
+        # Get selected format
+        save_format = self.save_format_var.get()
+        
+        # Get the dialog configuration from the registry
+        dialog_config = self.save_dialog_configs.get(save_format)
+        
+        # Handle missing dialog configuration
+        if not dialog_config:
+            self.results_text.config(state='normal')
+            self.results_text.insert(tk.END, f"\n--- Error: configuration not found '{save_format}' ---")
+            self.results_text.config(state='disabled')
+            return
+            
+        # Opnen the Save As dialog
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=dialog_config['defaultextension'],
+            filetypes=dialog_config['filetypes'],
+            title="Save results as..."
+        )
+        
+        # Check if the user provided a filepath
+        if not filepath:
+            return 
+            
+        # Call the saving logic
+        try:
+            save_data(self.last_results, save_format, filepath)
+            
+            self.results_text.config(state='normal')
+            self.results_text.insert(tk.END, f"\n--- Results found in: {filepath} ---")
+            self.results_text.config(state='disabled')
+            
+        except Exception as e:
+            self.results_text.config(state='normal')
+            self.results_text.insert(tk.END, f"\n--- Error during saving: {e} ---")
+            self.results_text.config(state='disabled')
